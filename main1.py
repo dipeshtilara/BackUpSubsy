@@ -19,12 +19,11 @@ PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"]
 # ---------- 2. UTILITIES ----------
 def clean_string(val):
     """Global cleaner for any cell: removes Mr. Ms. Mrs. Miss and extra spaces."""
-    if pd.isna(val) or not isinstance(val, str): 
+    if pd.isna(val) or not isinstance(val, (str, object)): 
         return val
-    s = val.strip()
+    s = str(val).strip()
     # Removes salutations at the start of any string (case insensitive)
     s = re.sub(r'^(Mr|Ms|Mrs|Miss)\.?\s+', '', s, flags=re.IGNORECASE)
-    # Also cleans any leftover dots/spaces
     return s.strip()
 
 def get_zone(section_label):
@@ -40,7 +39,6 @@ def is_exempt(name):
 def cell_has_class(val):
     if pd.isna(val): return False
     s = str(val).strip().lower()
-    # Ignore these labels for substitution needs
     if s in ["", "free", "vacant", "zero pd", "0 pd", "zero", "off", "skill"]:
         return False
     return True
@@ -53,10 +51,14 @@ def to_excel(df):
 
 # ---------- 3. LOAD & CLEAN DATA ----------
 def load_and_clean():
+    df = None
     if os.path.exists(LOCAL_FILENAME):
-        try: df = pd.read_excel(LOCAL_FILENAME, header=0)
-        except: df = None
-    else:
+        try: 
+            df = pd.read_excel(LOCAL_FILENAME, header=0)
+        except: 
+            pass
+            
+    if df is None:
         uploaded = st.file_uploader("Upload Timetable Excel", type=["xlsx"])
         if not uploaded: st.stop()
         df = pd.read_excel(uploaded, header=0)
@@ -64,9 +66,13 @@ def load_and_clean():
     # Clean the column headers
     df.columns = df.columns.str.strip().str.lower()
     
-    # APPLY GLOBAL CLEANING to every single cell in the dataframe
-    # This removes Mr./Ms. from teacher names AND from class cells
-    df = df.applymap(clean_string)
+    # FIX: Use .map() instead of .applymap() for newer Pandas versions
+    # This cleans every cell in the dataframe globally
+    try:
+        df = df.map(clean_string)
+    except AttributeError:
+        # Fallback for older pandas versions
+        df = df.applymap(clean_string)
     
     return df
 
@@ -88,7 +94,9 @@ def arrange_substitutions(day_df, absent_teachers):
     teacher_schedule = {t: [None] * len(period_cols) for t in available_staff}
 
     for t in available_staff:
-        row = day_df[day_df['tname'] == t].iloc[0]
+        rows = day_df[day_df['tname'] == t]
+        if rows.empty: continue
+        row = rows.iloc[0]
         for idx, p in enumerate(period_cols):
             val = row.get(p)
             if cell_has_class(val):
@@ -102,7 +110,11 @@ def arrange_substitutions(day_df, absent_teachers):
         random.shuffle(current_absents)
         for abs_t in current_absents:
             if is_exempt(abs_t): continue
-            val = day_df[day_df['tname'] == abs_t].iloc[0].get(p_col)
+            
+            rows = day_df[day_df['tname'] == abs_t]
+            if rows.empty: continue
+            val = rows.iloc[0].get(p_col)
+            
             if cell_has_class(val):
                 sec_label = str(val).strip()
                 target_zone = get_zone(sec_label)
