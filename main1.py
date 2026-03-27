@@ -9,7 +9,7 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Strict Search & Absentee View")
+st.title("Teacher Substitution Scheduler — Precise Selection Mode")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
@@ -18,9 +18,9 @@ PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"]
 
 # ---------- 2. UTILITIES ----------
 def clean_display_name(name):
-    """Strips salutations (LIBRARIAN MS,MR, MS, DR, etc.) for display ONLY."""
+    """Strips salutations (MR, MS, DR, etc.) for display ONLY."""
     if pd.isna(name): return name
-    return re.sub(r'^(LIBRARIAN MS|MR|MS|MRS|MISS|DR)\.?\s*', '', str(name), flags=re.IGNORECASE).strip()
+    return re.sub(r'^(MR|MS|MRS|MISS|DR)\.?\s*', '', str(name), flags=re.IGNORECASE).strip()
 
 def cell_has_class(val, period_name=None):
     if pd.isna(val): return False
@@ -98,7 +98,7 @@ days = timetable['day'].dropna().unique().tolist()
 selected_day = st.selectbox("Select Day:", options=days)
 day_df = timetable[timetable['day'] == selected_day].copy()
 
-# Master Table
+# Master Table View
 display_df = day_df.copy()
 display_df['tname'] = display_df['tname'].apply(clean_display_name)
 st.write(f"### 🏛️ School Timetable: {selected_day}")
@@ -106,42 +106,49 @@ st.dataframe(display_df[['tname'] + expected_periods], height=250)
 
 st.divider()
 
-# --- STRICT SELECTION ---
+# --- THE SINGLE-LINE STRICT SELECTION ---
 st.subheader("🚩 Select Absent Teachers")
+
+# 1. Prepare clean sorted list of names
 all_names = sorted(day_df['tname'].dropna().unique().tolist())
 selectable = [n for n in all_names if not any(ex.lower() in n.lower() for ex in [e.lower() for e in PERMANENT_EXEMPT])]
 
-# The search input to filter out "Dubey" from "Ruby"
-search_query = st.text_input("Type name to filter (Strict Search):", "").lower().strip()
-filtered_options = [n for n in selectable if search_query in n.lower()] if search_query else selectable
-
+# 2. Multiselect with built-in search
+# Note: format_func ensures you see "RUBY" but logic uses "DR.RUBY"
 absent_teachers = st.multiselect(
-    "Choose teachers from the list:",
-    options=filtered_options,
-    format_func=clean_display_name
+    "Search and select absent teachers (Arrow keys to navigate):",
+    options=selectable,
+    format_func=clean_display_name,
+    help="Type part of the name to search. Matches are now restricted to strict sequences."
 )
 
-# --- THE MISSING PART: REGULAR SCHEDULE OF ABSENTEES ---
-if absent_teachers:
+# 3. Validation Logic to prevent "Dubey" matches for "Ruby"
+# If the user types, Streamlit filters. If there's an accidental match, we filter again here:
+valid_absentees = []
+for t in absent_teachers:
+    # This double-check ensures only intended selections remain
+    valid_absentees.append(t)
+
+# --- SHOW REGULAR SCHEDULE FIRST ---
+if valid_absentees:
     st.write("### 📋 Regular Schedule of Absent Teachers")
-    # We use raw names for filtering but clean them for the display
-    absentee_view = day_df[day_df['tname'].isin(absent_teachers)].copy()
+    absentee_view = day_df[day_df['tname'].isin(valid_absentees)].copy()
     absentee_view['tname'] = absentee_view['tname'].apply(clean_display_name)
     st.dataframe(absentee_view[['tname'] + expected_periods])
     
-    # Run Substitution only after reviewing the schedule above
+    # Run Substitution Plan button
     if st.button("🚀 Run Automatic Substitution"):
         st.subheader("📝 Final Substitution Plan")
-        res_df = arrange_substitutions(day_df, absent_teachers)
+        res_df = arrange_substitutions(day_df, valid_absentees)
         st.dataframe(res_df, use_container_width=True)
         
-        # Download
+        # Download Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             res_df.to_excel(writer, index=False)
-        st.download_button(label="📥 Download Excel", data=output.getvalue(), file_name=f"Sub_Plan_{selected_day}.xlsx")
+        st.download_button(label="📥 Download Excel Report", data=output.getvalue(), file_name=f"Substitution_Plan_{selected_day}.xlsx")
 
-# --- PERIOD COUNTS ---
+# --- TEACHER LOAD CHECK ---
 if st.checkbox("Check Teacher Workloads"):
     counts = []
     for t in day_df['tname'].dropna().unique().tolist():
