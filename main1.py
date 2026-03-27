@@ -9,20 +9,22 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Clean Names Mode")
+st.title("Teacher Substitution Scheduler — Global Name Cleanup")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
-# Note: Keep these in uppercase for comparison
+# Use Cleaned Uppercase Names here
 PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"] 
 
 # ---------- 2. UTILITIES ----------
-def clean_name(name):
-    """Removes Mr., Ms., Mrs., and extra dots/spaces from names."""
-    if pd.isna(name): return name
-    s = str(name).strip()
-    # Regex to remove Mr, Ms, Mrs (with or without dots) at the start
+def clean_string(val):
+    """Global cleaner for any cell: removes Mr. Ms. Mrs. Miss and extra spaces."""
+    if pd.isna(val) or not isinstance(val, str): 
+        return val
+    s = val.strip()
+    # Removes salutations at the start of any string (case insensitive)
     s = re.sub(r'^(Mr|Ms|Mrs|Miss)\.?\s+', '', s, flags=re.IGNORECASE)
+    # Also cleans any leftover dots/spaces
     return s.strip()
 
 def get_zone(section_label):
@@ -33,11 +35,12 @@ def get_zone(section_label):
 
 def is_exempt(name):
     if not name: return False
-    return clean_name(name).upper() in [n.upper() for n in PERMANENT_EXEMPT]
+    return clean_string(name).upper() in [n.upper() for n in PERMANENT_EXEMPT]
 
 def cell_has_class(val):
     if pd.isna(val): return False
     s = str(val).strip().lower()
+    # Ignore these labels for substitution needs
     if s in ["", "free", "vacant", "zero pd", "0 pd", "zero", "off", "skill"]:
         return False
     return True
@@ -48,21 +51,26 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name='Substitutions')
     return output.getvalue()
 
-# ---------- 3. LOAD DATA ----------
-def load_timetable():
+# ---------- 3. LOAD & CLEAN DATA ----------
+def load_and_clean():
     if os.path.exists(LOCAL_FILENAME):
-        try: return pd.read_excel(LOCAL_FILENAME, header=0)
-        except: pass
-    uploaded = st.file_uploader("Upload Excel", type=["xlsx"])
-    if not uploaded: st.stop()
-    return pd.read_excel(uploaded, header=0)
+        try: df = pd.read_excel(LOCAL_FILENAME, header=0)
+        except: df = None
+    else:
+        uploaded = st.file_uploader("Upload Timetable Excel", type=["xlsx"])
+        if not uploaded: st.stop()
+        df = pd.read_excel(uploaded, header=0)
 
-timetable = load_timetable()
-timetable.columns = timetable.columns.str.strip().str.lower()
+    # Clean the column headers
+    df.columns = df.columns.str.strip().str.lower()
+    
+    # APPLY GLOBAL CLEANING to every single cell in the dataframe
+    # This removes Mr./Ms. from teacher names AND from class cells
+    df = df.applymap(clean_string)
+    
+    return df
 
-# --- APPLY NAME CLEANING IMMEDIATELY ---
-if 'tname' in timetable.columns:
-    timetable['tname'] = timetable['tname'].apply(clean_name)
+timetable = load_and_clean()
 
 day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 timetable['day'] = pd.Categorical(timetable['day'].str.strip().str.capitalize(), categories=day_order, ordered=True)
@@ -70,8 +78,7 @@ period_cols = sorted([c for c in timetable.columns if re.fullmatch(r'p\d+', c)],
 
 # ---------- 4. THE ENGINE ----------
 def arrange_substitutions(day_df, absent_teachers):
-    # Standardize absentees for comparison
-    abs_clean = [clean_name(a).upper() for a in absent_teachers]
+    abs_clean = [clean_string(a).upper() for a in absent_teachers]
     
     available_staff = [t for t in day_df['tname'].dropna().unique() 
                        if not is_exempt(t) and t.upper() not in abs_clean]
@@ -140,7 +147,7 @@ if mode == "Daily":
     sel_day = st.selectbox("Select Day:", options=days)
     day_df = timetable[timetable['day'] == sel_day].copy()
     
-    st.subheader(f"🏛️ Full School Timetable: {sel_day}")
+    st.subheader(f"🏛️ Full School Timetable: {sel_day} (Cleaned)")
     st.dataframe(day_df[['tname'] + period_cols], height=300)
     
     st.divider()
@@ -161,7 +168,7 @@ if mode == "Daily":
             st.download_button("📥 Download Excel", data=to_excel(res), file_name=f"Subs_{sel_day}.xlsx")
 
 else:
-    st.subheader("📅 Weekly Timetable Overview")
+    st.subheader("📅 Weekly Timetable Overview (Cleaned)")
     st.dataframe(timetable[['day', 'tname'] + period_cols], height=400)
     
     teachers_all = sorted([t for t in timetable['tname'].dropna().unique().tolist() if not is_exempt(t)])
