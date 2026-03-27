@@ -9,11 +9,13 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Schedule & Plan View")
+st.title("Teacher Substitution Scheduler — Principal & P0 Filtered")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
-PERMANENT_EXEMPT = ["PRINCIPAL", "ARCHANA SRIVASTAVA"] 
+
+# List of names to NEVER use for substitutions and NEVER provide subs for
+PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"] 
 
 # ---------- 2. UTILITIES ----------
 def get_zone(section_label):
@@ -22,10 +24,17 @@ def get_zone(section_label):
     grade = int(match.group())
     return "Junior" if 6 <= grade <= 7 else "Main"
 
+def is_exempt(name):
+    if not name: return False
+    return str(name).strip().upper() in [n.upper() for n in PERMANENT_EXEMPT]
+
 def cell_has_class(val):
     if pd.isna(val): return False
     s = str(val).strip().lower()
-    return s not in ["", "free", "vacant", "zero pd", "0 pd", "zero", "off"]
+    # If the cell contains these words, it's considered "Free"
+    if s in ["", "free", "vacant", "zero pd", "0 pd", "zero", "off", "skill"]:
+        return False
+    return True
 
 def to_excel(df):
     output = BytesIO()
@@ -50,11 +59,9 @@ period_cols = sorted([c for c in timetable.columns if re.fullmatch(r'p\d+', c)],
 
 # ---------- 4. THE ENGINE ----------
 def arrange_substitutions(day_df, absent_teachers):
-    exempt_clean = [n.strip().upper() for n in PERMANENT_EXEMPT]
-    abs_clean = [n.strip().upper() for n in absent_teachers]
-    
+    # Strictly filter the staff who can actually take a substitution
     available_staff = [t for t in day_df['tname'].dropna().unique() 
-                       if t.strip().upper() not in abs_clean and t.strip().upper() not in exempt_clean]
+                       if not is_exempt(t) and t.strip().upper() not in [a.strip().upper() for a in absent_teachers]]
     
     sub_counts = {t: 0 for t in available_staff}
     teacher_load = {t: [False] * len(period_cols) for t in available_staff}
@@ -74,6 +81,10 @@ def arrange_substitutions(day_df, absent_teachers):
         current_absents = list(absent_teachers)
         random.shuffle(current_absents)
         for abs_t in current_absents:
+            # If the absent person is the Principal, don't even try to fill their periods
+            if is_exempt(abs_t):
+                continue
+
             val = day_df[day_df['tname'] == abs_t].iloc[0].get(p_col)
             if cell_has_class(val):
                 sec_label = str(val).strip()
@@ -109,7 +120,8 @@ def arrange_substitutions(day_df, absent_teachers):
 
     final_output = []
     for t, p_data in results.items():
-        row = {"Absent Teacher": t}; row.update(p_data); final_output.append(row)
+        if not is_exempt(t): # Hide exempt teachers from final substitution result
+            row = {"Absent Teacher": t}; row.update(p_data); final_output.append(row)
     return pd.DataFrame(final_output)
 
 # ---------- 5. UI ----------
@@ -120,16 +132,17 @@ if mode == "Daily":
     sel_day = st.selectbox("Select Day:", options=days)
     day_df = timetable[timetable['day'] == sel_day].copy()
     
-    # 1. Select Absentees
-    abs_list = st.multiselect("Select Absent Teachers:", options=day_df['tname'].dropna().unique().tolist())
+    # Select Absentees (Principal/VP will be filtered out of the selection options too)
+    all_teachers = day_df['tname'].dropna().unique().tolist()
+    selectable_teachers = [t for t in all_teachers if not is_exempt(t)]
+    
+    abs_list = st.multiselect("Select Absent Teachers:", options=selectable_teachers)
     
     if abs_list:
-        # --- PART A: SHOW ABSENTEE SCHEDULE ---
         st.subheader(f"📅 Regular Schedule of Absentees ({sel_day})")
         absentee_schedule = day_df[day_df['tname'].isin(abs_list)]
         st.dataframe(absentee_schedule[['tname'] + period_cols])
         
-        # --- PART B: SHOW SUBSTITUTION PLAN ---
         if st.button("Generate Substitution Plan"):
             st.divider()
             st.subheader("📝 Suggested Substitutions")
@@ -138,8 +151,8 @@ if mode == "Daily":
             st.download_button("📥 Download Excel", data=to_excel(res), file_name=f"Subs_{sel_day}.xlsx")
 
 else:
-    # Weekly View remains consistent with previous logic
-    abs_week = st.multiselect("Select Absent Teachers (Weekly):", options=timetable['tname'].dropna().unique().tolist())
+    teachers_all = [t for t in timetable['tname'].dropna().unique().tolist() if not is_exempt(t)]
+    abs_week = st.multiselect("Select Absent Teachers (Weekly):", options=teachers_all)
     if st.button("Generate Weekly Table"):
         all_res = []
         for d in day_order:
