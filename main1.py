@@ -14,6 +14,10 @@ st.title("Teacher Substitution Scheduler — Daily / Weekly")
 LOCAL_FILENAME = "TT_apr26.xlsx"   # your uploaded file name
 DEFAULT_PERIOD_COUNT = 9  # p0..p8
 
+# Teachers who should NEVER be assigned substitutions
+# Added to prevent Principal and Archana S. from being used for subsy
+PERMANENT_EXEMPT = ["PRINCIPAL", "ARCHANA SRIVASTAVA", "ARCHANA S."] 
+
 # --- MASTER DATA FOR SMART SUBSTITUTION ---
 TEACHER_SUBJECTS = {
     # Main Building (8-12) & Specialists
@@ -103,6 +107,9 @@ if off_classes:
     off_classes_list = st.multiselect("Select off class substrings:", options=classes_list)
 
 def cell_has_class(val, period_name=None):
+    """
+    Logic Updated: p0 is now included for all classes, not just 'skill'.
+    """
     if pd.isna(val): return False
     s = str(val).strip()
     if s == "": return False
@@ -110,16 +117,22 @@ def cell_has_class(val, period_name=None):
     if off_classes_list:
         for off in off_classes_list:
             if off and off.lower() in s_lower: return False
-    if period_name and period_name.lower() == "p0":
-        return "skill" in s_lower
-    if (("zero pd" in s_lower) or (s_lower == "0 pd") or (s_lower == "zero")) and ("skill" not in s_lower):
+            
+    # Explicit zero pd labels still ignored unless it's a valid class/section
+    if (s_lower == "zero pd") or (s_lower == "0 pd") or (s_lower == "zero"):
         return False
+        
     return True
 
 # ---------- CORE SUBSTITUTION ENGINE ----------
 def arrange_substitutions(day_df, absent_teachers):
     expected = expected_periods
-    available_staff = [t for t in day_df['tname'].dropna().unique() if t not in absent_teachers]
+    
+    # Logic Updated: Available staff now strictly excludes PERMANENT_EXEMPT list
+    available_staff = [
+        t for t in day_df['tname'].dropna().unique() 
+        if t not in absent_teachers and t.upper() not in [name.upper() for name in PERMANENT_EXEMPT]
+    ]
     
     sub_counts = {t: 0 for t in available_staff}
     teacher_load = {t: [False] * len(expected) for t in available_staff}
@@ -258,4 +271,4 @@ else:
             st.dataframe(pd.concat(subs_all, ignore_index=True))
 
 st.write("---")
-st.caption("v2.0: Building-aware, AI-Priority, Streak-Protection enabled.")
+st.caption("v2.1: Fixed Exempt List & p0 Logic.")
