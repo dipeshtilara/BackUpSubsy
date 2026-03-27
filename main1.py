@@ -8,15 +8,14 @@ import re
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Clean Names Edition")
+st.title("Teacher Substitution Scheduler — Precise Selection Mode")
 
 # ---------- CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
 DEFAULT_PERIOD_COUNT = 9  
-# Names to exclude from taking or needing substitutions
 PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"] 
 
-# ---------- THE NAME CLEANER ----------
+# ---------- THE NAME CLEANER (Stripping MR. MS. etc) ----------
 def clean_display_name(name):
     """Removes MR. MS. MRS. etc. from the string for display/output."""
     if pd.isna(name): return name
@@ -53,12 +52,11 @@ def cell_has_class(val, period_name=None):
         return "skill" in s_lower
     return True
 
-# ---------- Automatic Substitution Allocator (Your Original Logic) ----------
+# ---------- Automatic Substitution Allocator (Your Logic) ----------
 def arrange_substitutions(filtered_day_df, absent_teachers):
     expected = expected_periods
     substitutions = []
     
-    # We use raw names for internal logic, but clean them for the result
     teachers = filtered_day_df['tname'].dropna().unique().tolist()
     assigned = {t: [] for t in teachers}
 
@@ -66,14 +64,13 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
         tname = row['tname']
         if pd.isna(tname): continue
         
-        # Internal matching happens here
+        # Internal matching for absentees
         if tname in absent_teachers:
-            # We clean the name only for the row header
+            # Output uses cleaned name
             entry = {"tname": clean_display_name(tname)} 
             
             for period in expected:
                 if cell_has_class(row.get(period, None), period):
-                    # Find free teachers: those not absent and having blank in that period
                     free_teachers = filtered_day_df[
                         ((filtered_day_df[period].isna()) | (filtered_day_df[period].astype(str).str.strip() == "")) &
                         (~filtered_day_df['tname'].isin(absent_teachers)) &
@@ -83,7 +80,6 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
                     random.shuffle(free_teachers)
                     substitute = None
                     for cand in free_teachers:
-                        # Fairness heuristic from your original code
                         first_half = any(p in assigned.get(cand, []) for p in expected[:5])
                         second_half = any(p in assigned.get(cand, []) for p in expected[5:])
                         if period in expected[:5] and first_half: continue
@@ -93,7 +89,6 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
                         assigned.setdefault(cand, []).append(period)
                         break
                     
-                    # Clean the substitute name before putting it in the cell
                     if substitute:
                         entry[period] = f"{row.get(period)} -> {clean_display_name(substitute)}"
                     else:
@@ -102,8 +97,7 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
                     entry[period] = None
             substitutions.append(entry)
             
-    sub_df = pd.DataFrame(substitutions, columns=['tname'] + expected)
-    return sub_df
+    return pd.DataFrame(substitutions, columns=['tname'] + expected)
 
 # ---------- UI ----------
 view_mode = st.radio("Select view mode:", ["Daily", "Weekly"], horizontal=True)
@@ -113,18 +107,24 @@ if view_mode == "Daily":
     selected_day = st.selectbox("Select day:", options=days)
     day_df = timetable[timetable['day'] == selected_day].copy()
     
-    # Show the table with cleaned names
+    # 1. Master view with clean names
     display_table = day_df.copy()
     display_table['tname'] = display_table['tname'].apply(clean_display_name)
     st.write(f"### Master Timetable for {selected_day}")
     st.dataframe(display_table)
 
-    # Filter Principal/VP out of the selection list
-    all_names = day_df['tname'].dropna().unique().tolist()
+    # 2. Precise Selection List
+    # We sort the list alphabetically to make arrow-key navigation easier
+    all_names = sorted(day_df['tname'].dropna().unique().tolist())
     selectable = [n for n in all_names if not any(ex.lower() in n.lower() for ex in PERMANENT_EXEMPT)]
     
-    # Selection list shows clean names
-    absent_teachers = st.multiselect("Select absent teachers:", options=selectable, format_func=clean_display_name)
+    st.info("💡 Use Arrow Keys to navigate and Enter to select teachers from the list below.")
+    absent_teachers = st.multiselect(
+        "Select absent teachers:", 
+        options=selectable, 
+        format_func=clean_display_name, # Shows clean name but keeps full name for matching
+        help="Scroll or use arrow keys to pick specific names."
+    )
 
     if absent_teachers:
         if st.button("🚀 Run Automatic Substitution"):
