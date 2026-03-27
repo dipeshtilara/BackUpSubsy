@@ -9,7 +9,7 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Precise 10-Char Mode")
+st.title("Teacher Substitution Scheduler — Precise Output Mode")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
@@ -18,12 +18,9 @@ PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"]
 
 # ---------- 2. UTILITIES ----------
 def clean_display_name(name):
-    """Strips salutations and limits to 10 characters."""
+    """Strips salutations (MR, MS, DR, etc.) for display ONLY."""
     if pd.isna(name): return name
-    # Strip MR, MS, DR, etc.
-    cleaned = re.sub(r'^(MR|MS|MRS|MISS|DR)\.?\s*', '', str(name), flags=re.IGNORECASE).strip()
-    # Apply 10 character limit
-    return cleaned[:10]
+    return re.sub(r'^(MR|MS|MRS|MISS|DR)\.?\s*', '', str(name), flags=re.IGNORECASE).strip()
 
 def cell_has_class(val, period_name=None):
     if pd.isna(val): return False
@@ -50,12 +47,11 @@ day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 timetable['day'] = timetable['day'].str.strip().str.capitalize()
 timetable['day'] = pd.Categorical(timetable['day'], categories=day_order, ordered=True)
 
-import re
 cols = list(timetable.columns)
 period_cols = [c for c in cols if re.fullmatch(r'p\d+', c)]
 expected_periods = sorted(period_cols, key=lambda x: int(re.findall(r'\d+', x)[0]))
 
-# ---------- 4. AUTOMATIC ALLOCATOR ----------
+# ---------- 4. AUTOMATIC ALLOCATOR (Limit only on substitution output) ----------
 def arrange_substitutions(filtered_day_df, absent_teachers):
     expected = expected_periods
     substitutions = []
@@ -66,8 +62,9 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
         tname = row['tname']
         if pd.isna(tname): continue
         if tname in absent_teachers:
-            # Name limit applied here
+            # Absent Teacher name stays full length (minus salutation)
             entry = {"Absent Teacher": clean_display_name(tname)} 
+            
             for idx, period in enumerate(expected):
                 cell_val = row.get(period, None)
                 if cell_has_class(cell_val, period):
@@ -89,8 +86,9 @@ def arrange_substitutions(filtered_day_df, absent_teachers):
                         break
                     
                     if substitute:
-                        # Name limit applied to substitute
-                        entry[period] = f"{cell_val} -> {clean_display_name(substitute)}"
+                        # APPLY 10-CHARACTER LIMIT ONLY HERE
+                        sub_name = clean_display_name(substitute)[:10]
+                        entry[period] = f"{cell_val} -> {sub_name}"
                     else:
                         entry[period] = f"{cell_val}: NO STAFF"
                 else:
@@ -119,11 +117,10 @@ selectable = [n for n in all_names if not any(ex.lower() in n.lower() for ex in 
 absent_teachers = st.multiselect(
     "Search and select absent teachers:",
     options=selectable,
-    format_func=clean_display_name,
-    help="Navigate with arrows. Fuzzy matching is limited by alphabetical sorting."
+    format_func=clean_display_name
 )
 
-# --- SHOW REGULAR SCHEDULE FIRST ---
+# --- SHOW REGULAR SCHEDULE ---
 if absent_teachers:
     st.write("### 📋 Regular Schedule of Absent Teachers")
     absentee_view = day_df[day_df['tname'].isin(absent_teachers)].copy()
