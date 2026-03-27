@@ -9,7 +9,7 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Destination Priority")
+st.title("Teacher Substitution Scheduler — Schedule & Plan View")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
@@ -82,36 +82,22 @@ def arrange_substitutions(day_df, absent_teachers):
                 candidates = [t for t in available_staff if not teacher_load[t][idx]]
                 
                 def get_priority_score(t):
-                    # Start with total workload (lower is better)
                     score = sub_counts[t] * 20
-                    
-                    # --- FORWARD LOOKING PRIORITY ---
                     next_idx = idx + 1
                     next_loc = None
                     if next_idx < len(period_cols):
-                        # Find their next actual class
                         for ahead in range(next_idx, len(period_cols)):
                             if teacher_load[t][ahead]:
                                 next_loc = teacher_schedule[t][ahead]
                                 break
                     
-                    # RULE: If their next class is where the sub is -> BIG PRIORITY
-                    if next_loc == target_zone:
-                        score -= 80  # They need to go there anyway. Move them now!
-                    
-                    # RULE: If they are currently in the target zone (from prev period)
+                    if next_loc == target_zone: score -= 80  
                     prev_idx = idx - 1
-                    if prev_idx >= 0 and teacher_schedule[t][prev_idx] == target_zone:
-                        score -= 40  # Already there, save the walk.
-
-                    # RULE: If they have to switch buildings for their next class
-                    if next_loc and next_loc != target_zone:
-                        score += 100 # Keep them free so they can walk to their next building.
-                    
+                    if prev_idx >= 0 and teacher_schedule[t][prev_idx] == target_zone: score -= 40  
+                    if next_loc and next_loc != target_zone: score += 100 
                     return score
 
                 candidates.sort(key=get_priority_score)
-
                 if candidates:
                     sub = candidates[0]
                     results[abs_t][p_col] = f"{sec_label} -> {sub} ({target_zone})"
@@ -127,19 +113,33 @@ def arrange_substitutions(day_df, absent_teachers):
     return pd.DataFrame(final_output)
 
 # ---------- 5. UI ----------
-mode = st.radio("View:", ["Daily", "Weekly"], horizontal=True)
+mode = st.radio("View Mode:", ["Daily", "Weekly"], horizontal=True)
 
 if mode == "Daily":
     days = timetable['day'].dropna().unique().tolist()
     sel_day = st.selectbox("Select Day:", options=days)
     day_df = timetable[timetable['day'] == sel_day].copy()
-    abs_list = st.multiselect("Absent Teachers:", options=day_df['tname'].dropna().unique().tolist())
-    if st.button("Generate Substitutions"):
-        res = arrange_substitutions(day_df, abs_list)
-        st.dataframe(res)
-        st.download_button("📥 Download Excel", data=to_excel(res), file_name=f"Subs_{sel_day}.xlsx")
+    
+    # 1. Select Absentees
+    abs_list = st.multiselect("Select Absent Teachers:", options=day_df['tname'].dropna().unique().tolist())
+    
+    if abs_list:
+        # --- PART A: SHOW ABSENTEE SCHEDULE ---
+        st.subheader(f"📅 Regular Schedule of Absentees ({sel_day})")
+        absentee_schedule = day_df[day_df['tname'].isin(abs_list)]
+        st.dataframe(absentee_schedule[['tname'] + period_cols])
+        
+        # --- PART B: SHOW SUBSTITUTION PLAN ---
+        if st.button("Generate Substitution Plan"):
+            st.divider()
+            st.subheader("📝 Suggested Substitutions")
+            res = arrange_substitutions(day_df, abs_list)
+            st.dataframe(res, use_container_width=True)
+            st.download_button("📥 Download Excel", data=to_excel(res), file_name=f"Subs_{sel_day}.xlsx")
+
 else:
-    abs_week = st.multiselect("Absent Teachers (Weekly):", options=timetable['tname'].dropna().unique().tolist())
+    # Weekly View remains consistent with previous logic
+    abs_week = st.multiselect("Select Absent Teachers (Weekly):", options=timetable['tname'].dropna().unique().tolist())
     if st.button("Generate Weekly Table"):
         all_res = []
         for d in day_order:
