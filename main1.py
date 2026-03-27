@@ -9,13 +9,22 @@ from io import BytesIO
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 st.set_page_config(layout="wide")
-st.title("Teacher Substitution Scheduler — Full Visibility Mode")
+st.title("Teacher Substitution Scheduler — Clean Names Mode")
 
 # ---------- 1. CONFIG ----------
 LOCAL_FILENAME = "TT_apr26.xlsx"   
+# Note: Keep these in uppercase for comparison
 PERMANENT_EXEMPT = ["PRINCIPAL", "VICE PRINCIPAL", "V.P.", "ARCHANA SRIVASTAVA"] 
 
 # ---------- 2. UTILITIES ----------
+def clean_name(name):
+    """Removes Mr., Ms., Mrs., and extra dots/spaces from names."""
+    if pd.isna(name): return name
+    s = str(name).strip()
+    # Regex to remove Mr, Ms, Mrs (with or without dots) at the start
+    s = re.sub(r'^(Mr|Ms|Mrs|Miss)\.?\s+', '', s, flags=re.IGNORECASE)
+    return s.strip()
+
 def get_zone(section_label):
     match = re.search(r'(\d+)', str(section_label))
     if not match: return "Main"
@@ -24,7 +33,7 @@ def get_zone(section_label):
 
 def is_exempt(name):
     if not name: return False
-    return str(name).strip().upper() in [n.upper() for n in PERMANENT_EXEMPT]
+    return clean_name(name).upper() in [n.upper() for n in PERMANENT_EXEMPT]
 
 def cell_has_class(val):
     if pd.isna(val): return False
@@ -50,14 +59,22 @@ def load_timetable():
 
 timetable = load_timetable()
 timetable.columns = timetable.columns.str.strip().str.lower()
+
+# --- APPLY NAME CLEANING IMMEDIATELY ---
+if 'tname' in timetable.columns:
+    timetable['tname'] = timetable['tname'].apply(clean_name)
+
 day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 timetable['day'] = pd.Categorical(timetable['day'].str.strip().str.capitalize(), categories=day_order, ordered=True)
 period_cols = sorted([c for c in timetable.columns if re.fullmatch(r'p\d+', c)], key=lambda x: int(re.findall(r'\d+', x)[0]))
 
 # ---------- 4. THE ENGINE ----------
 def arrange_substitutions(day_df, absent_teachers):
+    # Standardize absentees for comparison
+    abs_clean = [clean_name(a).upper() for a in absent_teachers]
+    
     available_staff = [t for t in day_df['tname'].dropna().unique() 
-                       if not is_exempt(t) and t.strip().upper() not in [a.strip().upper() for a in absent_teachers]]
+                       if not is_exempt(t) and t.upper() not in abs_clean]
     
     sub_counts = {t: 0 for t in available_staff}
     teacher_load = {t: [False] * len(period_cols) for t in available_staff}
@@ -123,11 +140,9 @@ if mode == "Daily":
     sel_day = st.selectbox("Select Day:", options=days)
     day_df = timetable[timetable['day'] == sel_day].copy()
     
-    # --- PART 1: FULL SCHOOL SCHEDULE ---
     st.subheader(f"🏛️ Full School Timetable: {sel_day}")
     st.dataframe(day_df[['tname'] + period_cols], height=300)
     
-    # --- PART 2: ABSENTEE SELECTION & SCHEDULE ---
     st.divider()
     all_teachers = sorted(day_df['tname'].dropna().unique().tolist())
     selectable_teachers = [t for t in all_teachers if not is_exempt(t)]
@@ -139,7 +154,6 @@ if mode == "Daily":
         absentee_schedule = day_df[day_df['tname'].isin(abs_list)]
         st.dataframe(absentee_schedule[['tname'] + period_cols])
         
-        # --- PART 3: SUBSTITUTION GENERATION ---
         if st.button("🚀 Generate Substitution Plan"):
             st.subheader("📝 Proposed Substitution Table")
             res = arrange_substitutions(day_df, abs_list)
@@ -147,7 +161,6 @@ if mode == "Daily":
             st.download_button("📥 Download Excel", data=to_excel(res), file_name=f"Subs_{sel_day}.xlsx")
 
 else:
-    # Weekly Mode
     st.subheader("📅 Weekly Timetable Overview")
     st.dataframe(timetable[['day', 'tname'] + period_cols], height=400)
     
